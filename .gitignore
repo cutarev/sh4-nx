@@ -1,0 +1,11 @@
+.venv
+build/
+/game
+src/recomp/gen/
+__pycache__/
+build-switch.log
+dist/
+*.nro
+sh4-progs.bin
+icon.jpg.bak
+/test/

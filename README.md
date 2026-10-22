@@ -1,24 +1,28 @@
 <p align="center"><img src="logo.webp" alt="Silent Hill 4: The Room" width="600"></p>
 
-# sh4-nx — Silent Hill 4: The Room for Nintendo Switch
-
-> 🚧 **In development.** Nothing to download yet. Code and releases will land here when it's ready.
+# Silent Hill 4: The Room — Nintendo Switch port (work in progress)
 
 A native Nintendo Switch port of the PC version of **Silent Hill 4: The Room**, made the same way as
 [sh2-nx](https://github.com/cutarev/sh2-nx) and [sh3-nx](https://github.com/cutarev/sh3-nx).
 
-It's not an emulator: the game's x86 executable is statically recompiled to C and built for the Switch's ARM64 CPU,
-with the Windows layer (Direct3D 8, DirectSound, DirectInput...) reimplemented on top of SDL2 and OpenGL.
+It's not an emulator. The game's x86 executable is statically recompiled to C ahead of time and the C is compiled
+for the Switch's ARM64 CPU. The Windows layer the game expects (Direct3D 8, DirectSound, DirectInput, kernel32...)
+is reimplemented on top of SDL2 and OpenGL; the movies (DirectShow MPEG-1) play through FFmpeg.
 
-## Planned
+No game files are included: you need your own copy of the PC game (the GOG release is what this is built against).
 
-- Native `.nro` for the Switch
-- Launcher (settings, game folder setup, etc.)
-- Linux build
+## Building
 
-## Requirements
+Put the PC game folder (or a link to it) at `game/` in the repo root, then:
 
-No game files are included. You'll need your own copy of the PC game (GOG release).
+```sh
+python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+tools/regen.sh                      # "SILENT HILL 4.exe" -> src/recomp/gen (a few minutes)
+cmake -S . -B build/linux && cmake --build build/linux -j   # Linux build, needs SDL2 and FFmpeg
+tools/build-switch.sh               # build/switch/sh4-nx.nro, in the devkitPro container (podman)
+```
+
+Run the Linux build from the game folder: `build/linux/sh4 <game folder>`.
 
 ---
 

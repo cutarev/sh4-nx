@@ -11,6 +11,17 @@ is reimplemented on top of SDL2 and OpenGL; the movies (DirectShow MPEG-1) play 
 
 No game files are included: you need your own copy of the PC game (the GOG release is what this is built against).
 
+## How to install
+
+1. Download `sh4-nx.nro` from the [releases](https://github.com/cutarev/sh4-nx/releases).
+2. Put it in `/switch/sh4-nx/` on the SD card, together with `SILENT HILL 4.exe` and the `data`, `demo`, `movie` and
+   `sound` folders from your PC copy of the game, and an empty `save` folder.
+3. Launch it from the homebrew menu in title takeover mode (hold R while starting an installed game), not from the
+   album.
+
+Controls: the left stick moves, the right stick turns the camera; A confirms, B cancels. If the game crashes,
+`sh4-crash.log` is written next to the NRO: please attach it to an issue.
+
 ## Building
 
 Put the PC game folder (or a link to it) at `game/` in the repo root, then:

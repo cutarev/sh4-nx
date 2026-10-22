@@ -71,7 +71,7 @@ static void dump_icall_trace(FILE *f) {
 /* Guest return addresses on the guest stack: the nearest thing to a guest backtrace. */
 static void dump_guest_stack(FILE *f) {
     fprintf(f, "guest stack code addresses:");
-    for (uint32_t a = g_esp, n = 0; n < 24 && a < g_esp + 0x2000; a += 4) {
+    for (uint32_t a = g_esp, n = 0; g_esp >= 0x10000 && n < 24 && a < g_esp + 0x2000; a += 4) {  /* not on a host thread */
         uint32_t v = MEM32(a);
         if (v >= g_xbox_code_lo && v < g_xbox_code_hi) { fprintf(f, " %08X", v); n++; }
     }
@@ -84,6 +84,10 @@ void rt_dump_thread(void) {
     dump_guest_stack(stderr);
     host_backtrace(2);
 }
+
+static int flight_on;
+static void flight_dump(void);
+static void snap_write(const char *path);
 
 /* Fatal errors go to stderr and to sh4-crash.log in the game folder (the Switch has no console). */
 _Noreturn void rt_fatal(const char *fmt, ...) {
@@ -102,6 +106,7 @@ _Noreturn void rt_fatal(const char *fmt, ...) {
         host_backtrace(fileno(outs[i]));
     }
     if (log) fclose(log);
+    if (flight_on) { flight_dump(); snap_write("sh4-crash.snap"); }
     _exit(1);
 }
 
@@ -248,6 +253,58 @@ static void trace_and_call(uint32_t i) {
            MEM32(g_esp + 4), MEM32(g_esp + 8), MEM32(g_esp + 12), MEM32(g_esp + 16), MEM32(g_esp));
 }
 
+/* ---- flight recorder (SH4_FLIGHT=1, with src/recomp/gen made by TRACE=<abs path>/build/disasm/functions.json
+ * tools/regen.sh): every function entry and exit and every bridged call, with the registers and the top of the
+ * stack, goes into a ring per thread. A crash or exit writes the rings to sh4-flight.bin (tools/flight.py reads
+ * it) and, on a crash, the guest memory to sh4-crash.snap. ---- */
+enum { FL_ENTER, FL_EXIT, FL_API };
+typedef struct { uint32_t va, kind; int32_t frame; uint32_t eax, ecx, edx, ebx, esi, edi, esp, s[4], rep; } Flight;
+#define FLIGHT_N (1u << 22)  /* ponytail: 240 MB a thread, a few seconds of history; raise it if a cause lies further back */
+#define FLIGHT_THREADS 64
+static Flight *flight_ring[FLIGHT_THREADS];
+static uint32_t flight_tid[FLIGHT_THREADS];
+static volatile uint32_t flight_count[FLIGHT_THREADS];
+static int n_flight;
+static __thread int flight_me = -1;
+static pthread_mutex_t flight_mx = PTHREAD_MUTEX_INITIALIZER;
+
+static void flight_rec(uint32_t va, uint32_t kind) {
+    if (flight_me < 0) {
+        pthread_mutex_lock(&flight_mx);
+        if (n_flight < FLIGHT_THREADS && (flight_ring[n_flight] = malloc(FLIGHT_N * sizeof(Flight))))
+            flight_me = n_flight, flight_tid[n_flight++] = g_fs_base ? MEM32(g_fs_base + 0x24) : 0;
+        pthread_mutex_unlock(&flight_mx);
+        if (flight_me < 0) { flight_me = FLIGHT_THREADS; return; }
+    }
+    if (flight_me == FLIGHT_THREADS) return;
+    Flight *ring = flight_ring[flight_me];
+    uint32_t n = flight_count[flight_me], ret = MEM32(g_esp);
+    /* a loop (the frame limiter spins on PeekMessage) counts on the record it repeats instead of
+     * flooding the ring: same function or call, same kind, same return address, among the last four */
+    for (uint32_t k = 1; k <= 4 && k <= n; k++) {
+        Flight *p = &ring[(n - k) & (FLIGHT_N - 1)];
+        if (p->va == va && p->kind == kind && p->s[0] == ret) { p->rep++; return; }
+    }
+    ring[n & (FLIGHT_N - 1)] = (Flight){va, kind, rt_frame, g_eax, g_ecx, g_edx, g_ebx, g_esi, g_edi, g_esp,
+                                        {ret, MEM32(g_esp + 4), MEM32(g_esp + 8), MEM32(g_esp + 12)}, 0};
+    flight_count[flight_me] = n + 1;
+}
+
+static void flight_dump(void) {
+    FILE *f = fopen("sh4-flight.bin", "wb");
+    if (!f) return;
+    fwrite("SH4F", 1, 4, f);
+    fwrite(&n_hostfn, 4, 1, f);
+    for (uint32_t i = 0; i < n_hostfn; i++) fwrite(hostfn[i].name, 1, strlen(hostfn[i].name) + 1, f);
+    fwrite(&n_flight, 4, 1, f);
+    for (int t = 0; t < n_flight; t++) {
+        uint32_t n = flight_count[t], hdr[4] = {flight_tid[t], n, n < FLIGHT_N ? n : FLIGHT_N, t == flight_me};
+        fwrite(hdr, 4, 4, f);
+        for (uint32_t k = n > FLIGHT_N ? n - FLIGHT_N : 0; k < n; k++) fwrite(&flight_ring[t][k & (FLIGHT_N - 1)], sizeof(Flight), 1, f);
+    }
+    fclose(f);
+}
+
 /* ---- oracle snapshots (SH4_ORACLE=<hex va>[,<nth call>]): with the function built with
  * --trace-functions, its entry and exit state go to oracle_in.snap / oracle_out.snap, together with
  * what every bridged call returned in between. tools/oracle.py replays it on the original x86. ---- */
@@ -280,6 +337,7 @@ static uint8_t *cover;
 
 void recomp_trace_enter(const char *name, uint32_t va) {
     (void)name;
+    if (flight_on) flight_rec(va, FL_ENTER);
     if (cover && va - g_xbox_code_lo < g_xbox_code_hi - g_xbox_code_lo && (!cover_all || rt_frame >= cover_from)) {
         uint32_t i = va - g_xbox_code_lo;
         if (!(cover[i >> 3] & (1 << (i & 7)))) {
@@ -298,6 +356,7 @@ void recomp_trace_enter(const char *name, uint32_t va) {
 
 void recomp_trace_exit(const char *name, uint32_t va) {
     (void)name;
+    if (flight_on) flight_rec(va, FL_EXIT);
     if (va != oracle_va || !oracle_armed) return;
     if (oracle_depth) { oracle_depth--; return; }
     snap_write("oracle_out.snap");
@@ -320,6 +379,7 @@ recomp_func_t recomp_lookup_kernel(uint32_t va) {
     if (va < HOSTFN_BASE || i >= n_hostfn) return NULL;
     if (!hostfn[i].fn) rt_fatal("unimplemented import %s", hostfn[i].name);
     if (rt_trace) trace_and_call(i);
+    if (flight_on) flight_rec(i, FL_API);
     if (oracle_armed) { oracle_pending = hostfn[i].fn; return oracle_record; }
     return hostfn[i].fn;
 }
@@ -512,6 +572,7 @@ int main(int argc, char **argv) {
     if (dir) snprintf(rt_game_dir, sizeof rt_game_dir, "%s", dir);
     if (chdir(rt_game_dir)) rt_fatal("cannot enter %s", rt_game_dir);
     rt_trace = getenv("SH4_TRACE") != NULL;
+    if (getenv("SH4_FLIGHT")) flight_on = 1, atexit(flight_dump);
     if (getenv("SH4_COVER")) cover_from = abs(atoi(getenv("SH4_COVER"))), cover_all = atoi(getenv("SH4_COVER")) < 0;
     if (getenv("SH4_ORACLE")) sscanf(getenv("SH4_ORACLE"), "%x,%u", &oracle_va, &oracle_nth);
 

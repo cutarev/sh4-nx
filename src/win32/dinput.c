@@ -396,6 +396,25 @@ static int scripted_key(int scancode) {
     return 0;
 }
 
+/* SH4_FLIGHT: each change in what the game reads goes to sh4-input.log, at once (seconds since start, frame):
+ * the keys held, by SDL name, or the pad's state in the game's format as hex. */
+static void log_input(uint32_t kind, uint32_t out, uint32_t size) {
+    static FILE *f;
+    static uint8_t last[3][256];
+    const uint8_t *s = GPTR(out);
+    if (kind > DEV_PAD || size > 256 || !memcmp(last[kind - 1], s, size)) return;
+    memcpy(last[kind - 1], s, size);
+    if (!f && !(f = fopen("sh4-input.log", "w"))) return;
+    fprintf(f, "%.3f f%d %s", SDL_GetTicks64() / 1000.0, rt_frame, kind == DEV_KEYBOARD ? "keys" : kind == DEV_PAD ? "pad" : "mouse");
+    if (kind == DEV_KEYBOARD) {
+        for (int i = 0; i < SDL_NUM_SCANCODES; i++)
+            if (dik[i] && dik[i] < size && s[dik[i]]) fprintf(f, " %s", SDL_GetScancodeName(i));
+    } else
+        for (uint32_t i = 0; i < size; i++) fprintf(f, "%s%02X", i % 4 ? "" : " ", s[i]);
+    fputc('\n', f);
+    fflush(f);
+}
+
 METHOD(dev_GetDeviceState, 3) {
     uint32_t kind = DEV_KIND(THIS), size = ARG(1), out = ARG(2);
     rt_pump_events();
@@ -408,6 +427,7 @@ METHOD(dev_GetDeviceState, 3) {
             if ((scripted ? scripted_key(i) : k[i]) && dik[i] && dik[i] < size) *(uint8_t *)GPTR(out + dik[i]) = 0x80;
     } else if (kind == DEV_PAD) pad_state(THIS, out, size);
     else memset(GPTR(out), 0, size);
+    if (getenv("SH4_FLIGHT")) log_input(kind, out, size);
     return 0;
 }
 

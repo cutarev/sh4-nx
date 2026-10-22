@@ -47,7 +47,7 @@ METHOD(dev_GetCapabilities, 2) {
 typedef struct { uint32_t guid, ofs, type; const char *name; } PadObj;
 static const PadObj pad_objs[] = {
     {0xA36D02E0u, 0, 0x002, "X Axis"}, {0xA36D02E1u, 4, 0x102, "Y Axis"},
-    {0xA36D02E2u, 8, 0x202, "Z Axis"}, {0xA36D02E3u, 20, 0x502, "Z Rotation"},
+    {0xA36D02F4u, 12, 0x302, "X Rotation"}, {0xA36D02F5u, 16, 0x402, "Y Rotation"},
     {0xA36D02F2u, 32, 0x010, "Hat Switch"},
     {0xA36D02F0u, 48, 0x004, "Button 0"}, {0xA36D02F0u, 49, 0x104, "Button 1"}, {0xA36D02F0u, 50, 0x204, "Button 2"},
     {0xA36D02F0u, 51, 0x304, "Button 3"}, {0xA36D02F0u, 52, 0x404, "Button 4"}, {0xA36D02F0u, 53, 0x504, "Button 5"},
@@ -311,11 +311,11 @@ static uint32_t axis(uint32_t dev, int v) {  /* SDL -32768..32767 to the range t
     return (uint32_t)(lo + (int32_t)(((int64_t)v + 32768) * (hi - lo) / 65535));
 }
 
-/* The pad as DirectInput objects, numbered like SH2EE's Xidi on PC (StandardGamepad, face buttons
- * X A B Y): X/Y the left stick, Z/Rz the right one, a hat, and 12 buttons
+/* The pad as DirectInput objects: X/Y the left stick, Rx/Ry the right one (an XInput pad through DirectInput;
+ * SH4 turns the camera on Rx/Ry, not on the Z/Rz its input.ini dump names), a hat, and 12 buttons
  * X A B Y LB RB LT RT Back Start LS RS. SDL names buttons by position (Xbox layout), on the Switch too. */
 enum { OBJ_AXIS, OBJ_BUTTON, OBJ_POV };
-static const uint32_t axis_guid[4] = {0xA36D02E0u, 0xA36D02E1u, 0xA36D02E2u, 0xA36D02E3u};  /* X Y Z Rz */
+static const uint32_t axis_guid[4] = {0xA36D02E0u, 0xA36D02E1u, 0xA36D02F4u, 0xA36D02F5u};  /* X Y Rx Ry */
 
 static int32_t pad_axis(SDL_GameController *c, uint32_t dev, int i) {
     static const SDL_GameControllerAxis ax[4] = {SDL_CONTROLLER_AXIS_LEFTX, SDL_CONTROLLER_AXIS_LEFTY,
@@ -363,7 +363,7 @@ static void pad_state(uint32_t dev, uint32_t out, uint32_t size) {
             if (guid == 0xA36D02F0u || (!guid && (type & 0xC))) kind = OBJ_BUTTON;
             else if (guid == 0xA36D02F2u || (!guid && (type & 0x10))) kind = OBJ_POV;
             else if (!guid && (type & 0x3)) kind = OBJ_AXIS;
-            else {  /* Rx, Ry, sliders: not on this pad, so at rest (zero would be full deflection) */
+            else {  /* Z, Rz, sliders: not on this pad, so at rest (zero would be full deflection) */
                 if (ofs + 4 <= size && (type & 0x3)) MEM32(out + ofs) = axis(dev, 0);
                 continue;
             }
@@ -400,9 +400,9 @@ static int scripted_key(int scancode) {
  * the keys held as DIK=SDL name;..., or the pad's state in the game's format as hex. */
 static void log_input(uint32_t kind, uint32_t out, uint32_t size) {
     static FILE *f;
-    static uint8_t last[3][256];
+    static uint8_t last[3][512];
     const uint8_t *s = GPTR(out);
-    if (kind > DEV_PAD || size > 256 || !memcmp(last[kind - 1], s, size)) return;
+    if (kind > DEV_PAD || size > 512 || !memcmp(last[kind - 1], s, size)) return;
     memcpy(last[kind - 1], s, size);
     if (!f && !(f = fopen("sh4-input.log", "w"))) return;
     fprintf(f, "%.3f f%d %s", SDL_GetTicks64() / 1000.0, rt_frame, kind == DEV_KEYBOARD ? "keys" : kind == DEV_PAD ? "pad" : "mouse");
@@ -422,7 +422,7 @@ static int replay_state(uint32_t kind, uint32_t out, uint32_t size) {
     static FILE *f;
     static int open_tried, next_frame = -1;
     static char line[1200];
-    static uint8_t cur[3][256];
+    static uint8_t cur[3][512];
     if (!open_tried++ && !(f = fopen(getenv("SH4_REPLAY"), "r"))) rt_log("replay: can't open %s", getenv("SH4_REPLAY"));
     for (;;) {
         if (next_frame < 0) {
@@ -442,11 +442,11 @@ static int replay_state(uint32_t kind, uint32_t out, uint32_t size) {
                 if (sscanf(t, " %x=", &code) == 1 && code < 256) cur[0][code] = 0x80;
         } else if (!strcmp(dev, "pad")) {
             unsigned b;
-            for (int i = 0; i < 256 && sscanf(p, " %2x%n", &b, &n) == 1; i++, p += n) cur[2][i] = (uint8_t)b;
+            for (int i = 0; i < 512 && sscanf(p, " %2x%n", &b, &n) == 1; i++, p += n) cur[2][i] = (uint8_t)b;
         }
     }
     if (kind > DEV_PAD) return 0;
-    memcpy(GPTR(out), cur[kind - 1], size < 256 ? size : 256);
+    memcpy(GPTR(out), cur[kind - 1], size < 512 ? size : 512);
     return 1;
 }
 

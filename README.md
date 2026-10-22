@@ -24,6 +24,9 @@ tools/build-switch.sh               # build/switch/sh4-nx.nro, in the devkitPro 
 
 Run the Linux build from the game folder: `build/linux/sh4 <game folder>`.
 
+Before the game comes a warning screen, then a launcher with Play and Options (which edits `sh4.ini`). Its images are
+built into the binary from `assets/`; `tools/launcher_assets.py <warning.png>` remakes them.
+
 ---
 
 Silent Hill is a trademark of Konami. This project is not affiliated with or endorsed by Konami.

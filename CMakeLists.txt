@@ -13,6 +13,12 @@ target_include_directories(sh4 PRIVATE src/recomp/gen)
 # Lifted code relies on wrapping arithmetic and type punning through guest memory.
 target_compile_options(sh4 PRIVATE -fwrapv -fno-strict-aliasing)
 set_source_files_properties(${GEN} PROPERTIES COMPILE_OPTIONS "-w")
+# The launcher's images are built into the binary (src/d3d8/launcher.c).
+file(SHA1 ${CMAKE_SOURCE_DIR}/assets/splash.bmp SPLASH_SHA1)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS assets/splash.bmp)
+set_source_files_properties(src/d3d8/launcher.c PROPERTIES COMPILE_DEFINITIONS
+                            "SRC_DIR=\"${CMAKE_SOURCE_DIR}\";SPLASH_SHA1=\"${SPLASH_SHA1}\""
+                            OBJECT_DEPENDS "${CMAKE_SOURCE_DIR}/assets/splash.bmp;${CMAKE_SOURCE_DIR}/assets/logo.bmp;${CMAKE_SOURCE_DIR}/assets/font.bmp")
 
 # The movies (src/game/movie.c): FFmpeg's MPEG-1 decoders. On Fedora: dnf install ffmpeg-free-devel.
 find_package(PkgConfig REQUIRED)

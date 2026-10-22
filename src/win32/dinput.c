@@ -397,7 +397,7 @@ static int scripted_key(int scancode) {
 }
 
 /* SH4_FLIGHT: each change in what the game reads goes to sh4-input.log, at once (seconds since start, frame):
- * the keys held, by SDL name, or the pad's state in the game's format as hex. */
+ * the keys held as DIK=SDL name;..., or the pad's state in the game's format as hex. */
 static void log_input(uint32_t kind, uint32_t out, uint32_t size) {
     static FILE *f;
     static uint8_t last[3][256];
@@ -407,18 +407,55 @@ static void log_input(uint32_t kind, uint32_t out, uint32_t size) {
     if (!f && !(f = fopen("sh4-input.log", "w"))) return;
     fprintf(f, "%.3f f%d %s", SDL_GetTicks64() / 1000.0, rt_frame, kind == DEV_KEYBOARD ? "keys" : kind == DEV_PAD ? "pad" : "mouse");
     if (kind == DEV_KEYBOARD) {
+        fputc(' ', f);
         for (int i = 0; i < SDL_NUM_SCANCODES; i++)
-            if (dik[i] && dik[i] < size && s[dik[i]]) fprintf(f, " %s", SDL_GetScancodeName(i));
+            if (dik[i] && dik[i] < size && s[dik[i]]) fprintf(f, "%02X=%s;", dik[i], SDL_GetScancodeName(i));
     } else
         for (uint32_t i = 0; i < size; i++) fprintf(f, "%s%02X", i % 4 ? "" : " ", s[i]);
     fputc('\n', f);
     fflush(f);
 }
 
+/* SH4_REPLAY=file (a copy of an sh4-input.log): the game reads that recording, by frame, instead of the
+ * keyboard and pad, to replay a session from the same save. */
+static int replay_state(uint32_t kind, uint32_t out, uint32_t size) {
+    static FILE *f;
+    static int open_tried, next_frame = -1;
+    static char line[1200];
+    static uint8_t cur[3][256];
+    if (!open_tried++ && !(f = fopen(getenv("SH4_REPLAY"), "r"))) rt_log("replay: can't open %s", getenv("SH4_REPLAY"));
+    for (;;) {
+        if (next_frame < 0) {
+            if (!f || !fgets(line, sizeof line, f)) break;
+            if (sscanf(line, "%*f f%d", &next_frame) != 1) continue;
+        }
+        if (next_frame > rt_frame) break;
+        next_frame = -1;
+        char *p = strchr(line, ' ') ? strchr(strchr(line, ' ') + 1, ' ') : NULL, dev[8];
+        int n;
+        if (!p || sscanf(p, " %7s%n", dev, &n) != 1) continue;
+        p += n;
+        if (!strcmp(dev, "keys")) {
+            memset(cur[0], 0, 256);
+            unsigned code;
+            for (char *t = strtok(p, ";\n"); t; t = strtok(NULL, ";\n"))
+                if (sscanf(t, " %x=", &code) == 1 && code < 256) cur[0][code] = 0x80;
+        } else if (!strcmp(dev, "pad")) {
+            unsigned b;
+            for (int i = 0; i < 256 && sscanf(p, " %2x%n", &b, &n) == 1; i++, p += n) cur[2][i] = (uint8_t)b;
+        }
+    }
+    if (kind > DEV_PAD) return 0;
+    memcpy(GPTR(out), cur[kind - 1], size < 256 ? size : 256);
+    return 1;
+}
+
 METHOD(dev_GetDeviceState, 3) {
     uint32_t kind = DEV_KIND(THIS), size = ARG(1), out = ARG(2);
     rt_pump_events();
-    if (kind == DEV_KEYBOARD) {
+    if (getenv("SH4_REPLAY") && replay_state(kind, out, size)) {
+        /* the recording */
+    } else if (kind == DEV_KEYBOARD) {
         int n;
         const uint8_t *k = SDL_GetKeyboardState(&n);
         memset(GPTR(out), 0, size);

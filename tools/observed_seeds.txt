@@ -1,3 +1,4 @@
 # Function entries the running game reached that the disassembler had missed: each from a
 # "indirect call to untranslated address" fatal. tools/seeds.py marks them observed, which lets them
 # split a function the sweep decoded through a data table.
+0x004F0FC0  crash after the first door (called from 0x4F0D07; 0x4F0FA2, the switch table before it, was swept as code)
